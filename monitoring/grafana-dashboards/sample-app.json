@@ -1,0 +1,159 @@
+{
+  "title": "Sample App - Container Monitoring",
+  "uid": "sample-app-dashboard",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "App Health",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "up{job='sample-app'}",
+          "legendFormat": "Up"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" }, "0": { "text": "DOWN", "color": "red" } } }
+          ]
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Active Requests",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sample_app_active_requests",
+          "legendFormat": "In-flight"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Heap Used (MB)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sample_app_nodejs_heap_size_used_bytes / 1024 / 1024",
+          "legendFormat": "Heap Used"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "MB" }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Process Memory RSS (MB)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sample_app_process_resident_memory_bytes / 1024 / 1024",
+          "legendFormat": "RSS"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "MB" }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "CPU Usage (seconds/second)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(sample_app_process_cpu_seconds_total[1m])",
+          "legendFormat": "CPU"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Memory Usage (MB)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sample_app_nodejs_heap_size_used_bytes / 1024 / 1024",
+          "legendFormat": "Heap Used"
+        },
+        {
+          "expr": "sample_app_nodejs_heap_size_total_bytes / 1024 / 1024",
+          "legendFormat": "Heap Total"
+        },
+        {
+          "expr": "sample_app_process_resident_memory_bytes / 1024 / 1024",
+          "legendFormat": "RSS"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "MB" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "HTTP Request Rate (req/sec)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(sample_app_http_requests_total[1m])) by (route, method)",
+          "legendFormat": "{{method}} {{route}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "HTTP Request Duration p99 (sec)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(sample_app_http_request_duration_seconds_bucket[1m])) by (le, route))",
+          "legendFormat": "p99 {{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Event Loop Lag (seconds)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(sample_app_nodejs_eventloop_lag_seconds[1m])",
+          "legendFormat": "Event Loop Lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 }
+    }
+  ]
+}
