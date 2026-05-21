@@ -1,0 +1,184 @@
+// Jenkins credentials required:
+//   DOCKER_CREDENTIALS_ID     — Docker Hub username/password
+//   KUBECONFIG_CREDENTIALS_ID — kubeconfig secret file (for K8s deploy)
+
+pipeline {
+
+  agent {
+    kubernetes {
+      yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: jnlp
+    image: jenkins/inbound-agent:3355.v388858a_47b_33-20
+    resources:
+      requests:
+        cpu: '512m'
+        memory: '512Mi'
+      limits:
+        cpu: '512m'
+        memory: '512Mi'
+  - name: docker
+    image: docker:24-dind
+    securityContext:
+      privileged: true
+    env:
+    - name: DOCKER_TLS_CERTDIR
+      value: ''
+    volumeMounts:
+    - name: docker-storage
+      mountPath: /var/lib/docker
+  volumes:
+  - name: docker-storage
+    emptyDir: {}
+"""
+      defaultContainer 'jnlp'
+    }
+  }
+
+  parameters {
+    booleanParam(name: 'RUN_BUILD',         defaultValue: true,  description: 'Build Docker image')
+    booleanParam(name: 'RUN_TEST',          defaultValue: true,  description: 'Run Jest tests')
+    booleanParam(name: 'RUN_SECURITY_SCAN', defaultValue: true,  description: 'Trivy CVE scan')
+    booleanParam(name: 'RUN_PUSH',          defaultValue: true,  description: 'Push image to Docker Hub')
+    booleanParam(name: 'RUN_DEPLOY',        defaultValue: false, description: 'Deploy to Kubernetes (requires AWS EKS kubeconfig)')
+  }
+
+  environment {
+    IMAGE_NAME          = 'nidhey27/sample-app'
+    IMAGE_TAG           = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'nogit'}"
+    FULL_IMAGE          = "docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
+    DEPLOY_NAMESPACE    = 'default'
+    DOCKER_CREDS_ID     = 'DOCKER_CREDS_ID'
+    KUBECONFIG_CREDS_ID = 'KUBECONFIG_CREDENTIALS_ID'
+    // Connect to dind sidecar over TCP (no TLS since DOCKER_TLS_CERTDIR is empty)
+    DOCKER_HOST         = 'tcp://localhost:2375'
+  }
+
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
+    timeout(time: 30, unit: 'MINUTES')
+    disableConcurrentBuilds(abortPrevious: true)
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        checkout scm
+        script {
+          // GIT_BRANCH is set by Jenkins (e.g. 'origin/main'); strip the remote prefix
+          env.BRANCH_NAME = (env.GIT_BRANCH ?: 'unknown').replaceFirst('origin/', '')
+          echo "Branch: ${env.BRANCH_NAME} | Build: #${env.BUILD_NUMBER} | SHA: ${env.GIT_COMMIT?.take(7)}"
+        }
+      }
+    }
+
+    stage('Build') {
+      when { expression { return params.RUN_BUILD } }
+      steps {
+        container('docker') {
+          dir('app') {
+            script {
+              dockerImage = docker.build(
+                "${IMAGE_NAME}:${IMAGE_TAG}",
+                "--no-cache --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} --build-arg GIT_SHA=${env.GIT_COMMIT?.take(7)} ."
+              )
+            }
+          }
+        }
+      }
+    }
+
+    stage('Test') {
+      when { expression { return params.RUN_TEST } }
+      steps {
+        container('docker') {
+          dir('app') {
+            sh '''
+              docker run --rm \
+                --name "test-${BUILD_NUMBER}" \
+                -v "$(pwd)":/app \
+                -w /app \
+                node:18-alpine \
+                sh -c "npm ci && npm test"
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Security Scan') {
+      when { expression { return params.RUN_SECURITY_SCAN } }
+      steps {
+        container('docker') {
+          // Remove '|| true' in production to hard-fail on HIGH/CRITICAL CVEs
+          sh """
+            docker run --rm \
+              -e DOCKER_HOST=tcp://localhost:2375 \
+              --network host \
+              aquasec/trivy:latest image \
+              --exit-code 1 \
+              --severity HIGH,CRITICAL \
+              --no-progress \
+              ${IMAGE_NAME}:${IMAGE_TAG} || true
+          """
+        }
+      }
+    }
+
+    stage('Push Image') {
+      when { expression { return params.RUN_PUSH } }
+      steps {
+        container('docker') {
+          script {
+            docker.withRegistry('https://index.docker.io/v1/', DOCKER_CREDS_ID) {
+              dockerImage.push(IMAGE_TAG)
+              if (env.BRANCH_NAME == 'main') {
+                dockerImage.push('latest')
+              }
+            }
+          }
+        }
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      when { expression { return params.RUN_DEPLOY } }
+      steps {
+        withCredentials([file(credentialsId: KUBECONFIG_CREDS_ID, variable: 'KUBECONFIG')]) {
+          sh """
+            sed 's|IMAGE_PLACEHOLDER|${FULL_IMAGE}|g' k8s/deployment.yaml \
+              | kubectl apply -f - -n ${DEPLOY_NAMESPACE}
+
+            kubectl apply -f k8s/service.yaml -n ${DEPLOY_NAMESPACE}
+
+            kubectl rollout status deployment/sample-app \
+              -n ${DEPLOY_NAMESPACE} \
+              --timeout=120s
+          """
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Deployed: ${FULL_IMAGE}"
+      // slackSend channel: '#deployments', color: 'good', message: "Deployed ${FULL_IMAGE}"
+    }
+    failure {
+      echo "Build #${env.BUILD_NUMBER} failed on branch '${env.BRANCH_NAME}'"
+      // slackSend channel: '#deployments', color: 'danger', message: "Build #${env.BUILD_NUMBER} failed"
+    }
+    always {
+      container('docker') {
+        sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true"
+      }
+      // deleteDir() skipped — node_modules owned by root (created inside docker container)
+      // causes permission errors. Pod is ephemeral; workspace is cleaned up on pod termination.
+    }
+  }
+}
