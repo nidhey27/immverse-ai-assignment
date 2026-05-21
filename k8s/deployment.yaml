@@ -1,0 +1,65 @@
+# Kubernetes Deployment
+# IMAGE_PLACEHOLDER is replaced by the Jenkins pipeline (sed substitution)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+  labels:
+    app: sample-app
+spec:
+  replicas: 2                     # two pods for basic HA
+  selector:
+    matchLabels:
+      app: sample-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                 # one extra pod during rollout
+      maxUnavailable: 0           # never drop below desired count
+  template:
+    metadata:
+      labels:
+        app: sample-app
+      annotations:
+        # Prometheus will auto-scrape this pod
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: sample-app
+          image: IMAGE_PLACEHOLDER   # injected by Jenkinsfile
+          ports:
+            - containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: APP_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app']  # optional: inject label
+          # Liveness: restart the pod if it's stuck
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          # Readiness: don't send traffic until app is ready
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # Resource guardrails — tune based on your cluster size
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+      # Graceful shutdown: give the app 30s to finish in-flight requests
+      terminationGracePeriodSeconds: 30
